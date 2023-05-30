@@ -124,6 +124,7 @@ func (m *imageManager) EnsureImageExists(ctx context.Context, pod *v1.Pod, conta
 	spec := kubecontainer.ImageSpec{
 		Image:       image,
 		Annotations: podAnnotations,
+		// set image's runtimeHandler here?
 	}
 	imageRef, err := m.imageService.GetImageRef(ctx, spec)
 	if err != nil {

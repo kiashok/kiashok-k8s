@@ -27,10 +27,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/features"
 
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	crierrors "k8s.io/cri-api/pkg/errors"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/kubernetes/pkg/kubelet/events"
 	"k8s.io/kubernetes/pkg/util/parsers"
 )
@@ -121,9 +123,22 @@ func (m *imageManager) EnsureImageExists(ctx context.Context, pod *v1.Pod, conta
 		})
 	}
 
-	spec := kubecontainer.ImageSpec{
-		Image:       image,
-		Annotations: podAnnotations,
+	var spec kubecontainer.ImageSpec
+	if !utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriApi) {
+		spec = kubecontainer.ImageSpec{
+			Image:       image,
+			Annotations: podAnnotations,
+		}
+	} else {
+		runtimeHandler := ""
+		if pod.Spec.RuntimeClassName != nil && *pod.Spec.RuntimeClassName != "" {
+			runtimeHandler = *pod.Spec.RuntimeClassName
+		}
+		spec = kubecontainer.ImageSpec{
+			Image:       image,
+			RuntimeHandler: runtimeHandler,
+			Annotations: podAnnotations,
+		}
 	}
 	imageRef, err := m.imageService.GetImageRef(ctx, spec)
 	if err != nil {

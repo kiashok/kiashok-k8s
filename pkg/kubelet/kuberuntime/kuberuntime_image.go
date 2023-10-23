@@ -18,6 +18,7 @@ package kuberuntime
 
 import (
 	"context"
+	"fmt"
 
 	v1 "k8s.io/api/core/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -26,6 +27,8 @@ import (
 	credentialprovidersecrets "k8s.io/kubernetes/pkg/credentialprovider/secrets"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/util/parsers"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/kubernetes/pkg/features"
 )
 
 // PullImage pulls an image from the network to local storage using the supplied
@@ -105,6 +108,16 @@ func (m *kubeGenericRuntimeManager) ListImages(ctx context.Context) ([]kubeconta
 	}
 
 	for _, img := range allImages {
+		// When RuntimeClassInImageCriApi feature gate is set, it is expected that the necessary
+		// changes needed for KEP 4216 has made it to the container runtime being used as well.
+		// Therefore, validate that image returned from ListImages() call above has a valid
+		// runtimehandler field set; that is, it should not be ""
+		if utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriApi) {
+			if img.Spec != nil && img.Spec.RuntimeHandler == "" {
+				return images, fmt.Errorf("RuntimeHandler used to pull image was not returned by container runtime", "ImageID", img.Id)
+			}
+		}
+
 		images = append(images, kubecontainer.Image{
 			ID:          img.Id,
 			Size:        int64(img.Size_),

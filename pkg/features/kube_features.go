@@ -699,6 +699,13 @@ const (
 	// certificate as expiration approaches.
 	RotateKubeletServerCertificate featuregate.Feature = "RotateKubeletServerCertificate"
 
+	// owner: @kiashok
+	// kep: https://kep.k8s.io/4216
+	// alpha: v1.29
+	//
+	// Adds support to pull images based on the runtime class specified
+	RuntimeClassInImageCriApi featuregate.Feature = "RuntimeClassInImageCriApi"
+
 	// owner: @danielvegamyhre
 	// kep: https://kep.k8s.io/2413
 	// beta: v1.27
@@ -1062,6 +1069,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	RecoverVolumeExpansionFailure: {Default: false, PreRelease: featuregate.Alpha},
 
 	RotateKubeletServerCertificate: {Default: true, PreRelease: featuregate.Beta},
+
+	RuntimeClassInImageCriApi: {Default: false, PreRelease: featuregate.Alpha},
 
 	ElasticIndexedJob: {Default: true, PreRelease: featuregate.Beta},
 

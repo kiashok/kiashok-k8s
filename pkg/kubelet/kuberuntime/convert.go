@@ -21,6 +21,8 @@ import (
 
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/kubernetes/pkg/features"
 )
 
 // This file contains help function to kuberuntime types to CRI runtime API types, or vice versa.
@@ -42,9 +44,21 @@ func toKubeContainerImageSpec(image *runtimeapi.Image) kubecontainer.ImageSpec {
 		}
 	}
 
-	return kubecontainer.ImageSpec{
-		Image:       image.Id,
-		Annotations: annotations,
+	if !utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriApi) {
+		return kubecontainer.ImageSpec{
+			Image:       image.Id,
+			Annotations: annotations,
+		}
+	} else {
+		runtimeHandler :=  ""
+		if image.Spec != nil {
+			runtimeHandler = image.Spec.RuntimeHandler
+		} 
+		return kubecontainer.ImageSpec{
+			Image:       image.Id,
+			RuntimeHandler: runtimeHandler,
+			Annotations: annotations,
+		}
 	}
 }
 
@@ -55,8 +69,16 @@ func toRuntimeAPIImageSpec(imageSpec kubecontainer.ImageSpec) *runtimeapi.ImageS
 			annotations[a.Name] = a.Value
 		}
 	}
-	return &runtimeapi.ImageSpec{
-		Image:       imageSpec.Image,
-		Annotations: annotations,
+	if !utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriApi) {
+		return &runtimeapi.ImageSpec{
+			Image:       imageSpec.Image,
+			Annotations: annotations,
+		}
+	} else {
+		return &runtimeapi.ImageSpec{
+			Image:       imageSpec.Image,
+			RuntimeHandler: imageSpec.RuntimeHandler,
+			Annotations: annotations,
+		}
 	}
 }

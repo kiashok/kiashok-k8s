@@ -52,6 +52,8 @@ type Version interface {
 type ImageSpec struct {
 	// ID of the image.
 	Image string
+	// Runtime handler used to pull this image
+	RuntimeHandler string
 	// The annotations for the image.
 	// This should be passed to CRI during image pulls and returned when images are listed.
 	Annotations []Annotation

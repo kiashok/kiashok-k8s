@@ -375,6 +375,7 @@ func TestPullAndListImageWithPodAnnotations(t *testing.T) {
 
 		image := images[0]
 		assert.Equal(t, "missing_image:latest", image.ID, "Image ID")
+		assert.Equal(t, "", image.Spec.RuntimeHandler, "image.Spec.RuntimeHandler not empty", "ImageID", image.ID)
 
 		expectedAnnotations := []Annotation{
 			{

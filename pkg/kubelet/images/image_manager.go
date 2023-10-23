@@ -27,7 +27,9 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/features"
 
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	crierrors "k8s.io/cri-api/pkg/errors"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
@@ -125,6 +127,16 @@ func (m *imageManager) EnsureImageExists(ctx context.Context, pod *v1.Pod, conta
 		Image:       image,
 		Annotations: podAnnotations,
 	}
+
+	// if RuntimeClassInImageCriAPI feature gate is enabled, set runtimeHandler CRI field
+	if utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriAPI) {
+		runtimeHandler := ""
+		if pod.Spec.RuntimeClassName != nil && *pod.Spec.RuntimeClassName != "" {
+			runtimeHandler = *pod.Spec.RuntimeClassName
+		}
+		spec.RuntimeHandler = runtimeHandler
+	}
+
 	imageRef, err := m.imageService.GetImageRef(ctx, spec)
 	if err != nil {
 		msg := fmt.Sprintf("Failed to inspect image %q: %v", container.Image, err)

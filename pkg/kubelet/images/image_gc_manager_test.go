@@ -182,14 +182,17 @@ func TestDetectImagesWithNewImage(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(zero, noContainer.firstDetected)
 	assert.Equal(zero, noContainer.lastUsed)
+	assert.Equal("", noContainer.runtimeHandlerUsedToPullImage)
 	withContainer, ok := manager.getImageRecord(imageID(1))
 	require.True(t, ok)
 	assert.Equal(zero, withContainer.firstDetected)
 	assert.True(withContainer.lastUsed.After(startTime))
+	assert.Equal("", noContainer.runtimeHandlerUsedToPullImage)
 	newContainer, ok := manager.getImageRecord(imageID(2))
 	require.True(t, ok)
 	assert.Equal(detectedTime, newContainer.firstDetected)
 	assert.Equal(zero, noContainer.lastUsed)
+	assert.Equal("", noContainer.runtimeHandlerUsedToPullImage)
 }
 
 func TestDeleteUnusedImagesExemptSandboxImage(t *testing.T) {

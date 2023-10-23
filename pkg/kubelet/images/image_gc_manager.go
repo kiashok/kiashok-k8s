@@ -32,8 +32,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/record"
 	statsapi "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/events"
 	"k8s.io/kubernetes/pkg/kubelet/util/sliceutils"
@@ -41,6 +43,8 @@ import (
 
 // instrumentationScope is OpenTelemetry instrumentation scope name
 const instrumentationScope = "k8s.io/kubernetes/pkg/kubelet/images"
+
+const imageRecordIndexTupleFormat = "%s-%s"
 
 // StatsProvider is an interface for fetching stats used during image garbage
 // collection.
@@ -84,7 +88,11 @@ type realImageGCManager struct {
 	// Container runtime
 	runtime container.Runtime
 
-	// Records of images and their use.
+	// Records of images and their use. Indexed by ImageId.
+	// If RuntimeClassInImageCriAPI feature gate is enabled, imageRecords
+	// are identified by a tuple of (imageId,runtimeHandler) that is passed
+	// from ListImages() call. If no runtimehandler is specified in response
+	// to ListImages() by the container runtime, "" is used.
 	imageRecords     map[string]*imageRecord
 	imageRecordsLock sync.Mutex
 
@@ -143,6 +151,8 @@ func (i *imageCache) get() []container.Image {
 
 // Information about the images we track.
 type imageRecord struct {
+	// runtime handler used to pull this image
+	runtimeHandlerUsedToPullImage string
 	// Time when this image was first detected.
 	firstDetected time.Time
 
@@ -246,10 +256,23 @@ func (im *realImageGCManager) detectImages(ctx context.Context, detectTime time.
 		currentImages.Insert(image.ID)
 
 		// New image, set it as detected now.
-		if _, ok := im.imageRecords[image.ID]; !ok {
-			klog.V(5).InfoS("Image ID is new", "imageID", image.ID)
-			im.imageRecords[image.ID] = &imageRecord{
-				firstDetected: detectTime,
+		if !utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriAPI) {
+			if _, ok := im.imageRecords[image.ID]; !ok {
+				klog.V(5).InfoS("Image ID is new", "imageID", image.ID)
+				im.imageRecords[image.ID] = &imageRecord{
+					firstDetected: detectTime,
+				}
+			}
+		} else {
+			// if runtimehandler is "" from ListImage() call, log a warning message
+			if image.Spec.RuntimeHandler == "" {
+				klog.V(5).InfoS("RuntimeHandler is empty", "imageID", image.ID)
+			}
+			// imageRecords are indexed by a tuple of imageID and runtimeHandler
+			imageTuple := fmt.Sprintf(imageRecordIndexTupleFormat, image.ID, image.Spec.RuntimeHandler)
+			im.imageRecords[imageTuple] = &imageRecord{
+				firstDetected:                 detectTime,
+				runtimeHandlerUsedToPullImage: image.Spec.RuntimeHandler,
 			}
 		}
 
@@ -371,7 +394,11 @@ func (im *realImageGCManager) freeSpace(ctx context.Context, bytesToFree int64, 
 	var deletionErrors []error
 	spaceFreed := int64(0)
 	for _, image := range images {
-		klog.V(5).InfoS("Evaluating image ID for possible garbage collection", "imageID", image.id)
+		if !utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriAPI) {
+			klog.V(5).InfoS("Evaluating image ID for possible garbage collection", "imageID", image.id)
+		} else {
+			klog.V(5).InfoS("Evaluating image ID for possible garbage collection", "imageID", image.id, "runtimeHandler", image.imageRecord.runtimeHandlerUsedToPullImage)
+		}
 		// Images that are currently in used were given a newer lastUsed.
 		if image.lastUsed.Equal(freeTime) || image.lastUsed.After(freeTime) {
 			klog.V(5).InfoS("Image ID was used too recently, not eligible for garbage collection", "imageID", image.id, "lastUsed", image.lastUsed, "freeTime", freeTime)
@@ -387,8 +414,18 @@ func (im *realImageGCManager) freeSpace(ctx context.Context, bytesToFree int64, 
 		}
 
 		// Remove image. Continue despite errors.
-		klog.InfoS("Removing image to free bytes", "imageID", image.id, "size", image.size)
-		err := im.runtime.RemoveImage(ctx, container.ImageSpec{Image: image.id})
+		var err error
+		if !utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriAPI) {
+			klog.InfoS("Removing image to free bytes", "imageID", image.id, "size", image.size)
+			err = im.runtime.RemoveImage(ctx, container.ImageSpec{Image: image.id})
+		} else {
+			// if runtimehandler is empty when RuntimeClassInImageCriAPI is enabled, log info message
+			if image.imageRecord.runtimeHandlerUsedToPullImage == "" {
+				klog.V(5).InfoS("RuntimeHandler is empty", "imageID", image.id)
+			}
+			klog.InfoS("Removing image to free bytes", "imageID", image.id, "size", image.size, "runtimeHandler", image.imageRecord.runtimeHandlerUsedToPullImage)
+			err = im.runtime.RemoveImage(ctx, container.ImageSpec{Image: image.id, RuntimeHandler: image.imageRecord.runtimeHandlerUsedToPullImage})
+		}
 		if err != nil {
 			deletionErrors = append(deletionErrors, err)
 			continue

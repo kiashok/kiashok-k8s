@@ -28,8 +28,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/record"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	statsapi "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
 	stats "k8s.io/kubernetes/pkg/kubelet/server/stats"
@@ -80,6 +83,17 @@ func imageName(id int) string {
 func makeImage(id int, size int64) container.Image {
 	return container.Image{
 		ID:   imageID(id),
+		Size: size,
+	}
+}
+
+// Make an image with the specified ID and runtimeHandler.
+func makeImageWithRuntimeHandler(id int, testRuntimeHandler string, size int64) container.Image {
+	return container.Image{
+		ID: imageID(id),
+		Spec: container.ImageSpec{
+			RuntimeHandler: testRuntimeHandler,
+		},
 		Size: size,
 	}
 }
@@ -182,14 +196,75 @@ func TestDetectImagesWithNewImage(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(zero, noContainer.firstDetected)
 	assert.Equal(zero, noContainer.lastUsed)
+	assert.Equal("", noContainer.runtimeHandlerUsedToPullImage)
 	withContainer, ok := manager.getImageRecord(imageID(1))
 	require.True(t, ok)
 	assert.Equal(zero, withContainer.firstDetected)
 	assert.True(withContainer.lastUsed.After(startTime))
+	assert.Equal("", noContainer.runtimeHandlerUsedToPullImage)
 	newContainer, ok := manager.getImageRecord(imageID(2))
 	require.True(t, ok)
 	assert.Equal(detectedTime, newContainer.firstDetected)
 	assert.Equal(zero, noContainer.lastUsed)
+	assert.Equal("", noContainer.runtimeHandlerUsedToPullImage)
+}
+
+func TestDetectImagesWithNewImageWithRuntimeHandlerInImageCriApiFeatureGate(t *testing.T) {
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.RuntimeClassInImageCriAPI, true)()
+	testRuntimeHandler := "test-RuntimeHandler"
+	ctx := context.Background()
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
+	mockStatsProvider := statstest.NewMockProvider(mockCtrl)
+
+	// Just one image initially.
+	manager, fakeRuntime := newRealImageGCManager(ImageGCPolicy{}, mockStatsProvider)
+	fakeRuntime.ImageList = []container.Image{
+		makeImageWithRuntimeHandler(0, testRuntimeHandler, 1024),
+		makeImageWithRuntimeHandler(1, testRuntimeHandler, 2048),
+	}
+	fakeRuntime.AllPodList = []*containertest.FakePod{
+		{Pod: &container.Pod{
+			Containers: []*container.Container{
+				makeContainer(1),
+			},
+		}},
+	}
+
+	_, err := manager.detectImages(ctx, zero)
+	assert := assert.New(t)
+	require.NoError(t, err)
+	assert.Equal(manager.imageRecordsLen(), 2)
+
+	// Add a new image.
+	fakeRuntime.ImageList = []container.Image{
+		makeImageWithRuntimeHandler(0, testRuntimeHandler, 1024),
+		makeImageWithRuntimeHandler(1, testRuntimeHandler, 1024),
+		makeImageWithRuntimeHandler(2, testRuntimeHandler, 1024),
+	}
+
+	detectedTime := zero.Add(time.Second)
+	startTime := time.Now().Add(-time.Millisecond)
+	_, err = manager.detectImages(ctx, detectedTime)
+	require.NoError(t, err)
+	assert.Equal(manager.imageRecordsLen(), 3)
+	noContainer, ok := manager.getImageRecord(imageID(0))
+	require.True(t, ok)
+	assert.Equal(zero, noContainer.firstDetected)
+	assert.Equal(zero, noContainer.firstDetected)
+	// When RuntimeClassInImageCriAPI feature gate is set, a new field in imageRecord
+	// struct is populated. Check this is as expected.
+	assert.Equal(testRuntimeHandler, noContainer.runtimeHandlerUsedToPullImage)
+	withContainer, ok := manager.getImageRecord(imageID(1))
+	require.True(t, ok)
+	assert.Equal(zero, withContainer.firstDetected)
+	assert.True(withContainer.lastUsed.After(startTime))
+	assert.Equal(testRuntimeHandler, noContainer.runtimeHandlerUsedToPullImage)
+	newContainer, ok := manager.getImageRecord(imageID(2))
+	require.True(t, ok)
+	assert.Equal(detectedTime, newContainer.firstDetected)
+	assert.Equal(zero, noContainer.lastUsed)
+	assert.Equal(testRuntimeHandler, noContainer.runtimeHandlerUsedToPullImage)
 }
 
 func TestDeleteUnusedImagesExemptSandboxImage(t *testing.T) {
@@ -422,6 +497,34 @@ func TestDeleteUnusedImagesRemoveAllUnusedImages(t *testing.T) {
 		makeImage(0, 1024),
 		makeImage(1, 2048),
 		makeImage(2, 2048),
+	}
+	fakeRuntime.AllPodList = []*containertest.FakePod{
+		{Pod: &container.Pod{
+			Containers: []*container.Container{
+				makeContainer(2),
+			},
+		}},
+	}
+
+	err := manager.DeleteUnusedImages(ctx)
+	assert := assert.New(t)
+	require.NoError(t, err)
+	assert.Len(fakeRuntime.ImageList, 1)
+}
+
+func TestDeleteUnusedImagesRemoveAllUnusedImagesWithRuntimeHandlerInImageCriApiFeatureGate(t *testing.T) {
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.RuntimeClassInImageCriAPI, true)()
+	testRuntimeHandler := "test-runtimeHandler"
+	ctx := context.Background()
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
+	mockStatsProvider := statstest.NewMockProvider(mockCtrl)
+
+	manager, fakeRuntime := newRealImageGCManager(ImageGCPolicy{}, mockStatsProvider)
+	fakeRuntime.ImageList = []container.Image{
+		makeImageWithRuntimeHandler(0, testRuntimeHandler, 1024),
+		makeImageWithRuntimeHandler(1, testRuntimeHandler, 2048),
+		makeImageWithRuntimeHandler(2, testRuntimeHandler, 2048),
 	}
 	fakeRuntime.AllPodList = []*containertest.FakePod{
 		{Pod: &container.Pod{

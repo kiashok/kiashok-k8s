@@ -29,8 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Microsoft/hcsshim"
-	"github.com/Microsoft/hcsshim/hcn"
+	"github.com/Microsoft/hnslib/hcn"
 	v1 "k8s.io/api/core/v1"
 	discovery "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
